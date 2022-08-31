@@ -24,17 +24,17 @@ const RECV_TIMEOUT:u64=10;
 const MSG_REG:u8=1;//注册
 const MSG_REQ:u8=2;//请求连接其他peer
 const MSG_HAN_S:u8=3;//向被请求方peer发送请求方的peer信息。
-//const MSG_HAN_C:u8=4;//向请求方peer发送被请求方的peer信息
+const MSG_HAN_C:u8=4;//向请求方peer发送被请求方的peer信息
 
 #[tokio::main]
 async fn main() {
     simple_logger::init_with_level(log::Level::Debug).unwrap();
     server().await;
-    test().await;
+    //test().await;
     println!("Hello, world!");
 }
 
-
+/*
 async fn test(){
     let socket = UdpSocket::bind(BIND_ADDR).expect("couldn't bind to address");
     let mut incoming = common::make_server_udp_endpoint(socket.try_clone().unwrap(),HOST_NAME,CER.to_vec(),KEY.to_vec()).unwrap();
@@ -52,6 +52,7 @@ async fn test(){
     println!("[client] connected: addr={}", connection.remote_address());
     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 }
+*/
 
 async fn server(){
     let socket = UdpSocket::bind(BIND_ADDR).expect("couldn't bind to address");
@@ -155,10 +156,7 @@ impl Peers{
 struct Peer{
     connection:quinn::Connection,
     self_sender:Sender<Vec<u8>>,
-    //dial_sender:Sender<(SocketAddr,String)>,
-    //offline_sender:Sender<String>,
     peers:Peers
-    //receiver:Receiver<Vec<u8>>,
 }
 
 impl Peer{
@@ -200,7 +198,7 @@ impl Peer{
         let mut bytes = vec!();
         let mut addr_bytes = common::addr::socketaddrv4_to_bytes(addr);
         bytes.push(addr_bytes.len() as u8 + 1);
-        bytes.push(MSG_HAN_S);
+        bytes.push(MSG_HAN_C);
         bytes.append(&mut addr_bytes);
         match self.self_sender.send(bytes).await{
             Ok(_)=>{},
