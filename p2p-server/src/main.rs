@@ -167,9 +167,9 @@ impl Id{
         (*id).clone()
     }
 
-    fn set(&self,id:&Vec<u8>){
+    fn set(&self,id_bytes:&Vec<u8>){
         let mut id = self.id.lock().unwrap();
-        (*id)=id.clone();
+        (*id)=id_bytes.clone();
     }
 }
 
@@ -274,6 +274,7 @@ impl Peer{
                                     MSG_REG=>{
                                         match self.peers.reg(buffer[2..len].to_vec(),self.clone()){
                                             Ok(_)=>{
+                                                self.id.set(&buffer[2..len].to_vec());
                                                 let mut log_out_channel = close_send.subscribe();
                                                 let peer_close = self.clone();
                                                 let id = buffer[2..len].to_vec();
