@@ -134,6 +134,7 @@ impl Peers{
         match (*peers).get(&id){
             Some(_)=>{Err("id already exists".to_string())},
             None=>{
+                log::info!("{:?} online",&id);
                 (*peers).insert(id, peer);
                 Ok(())
             }
@@ -151,9 +152,31 @@ impl Peers{
     }
 }
 
+#[derive(Clone)]
+struct Id{
+    id:Arc<Mutex<Vec<u8>>>
+}
+
+impl Id{
+    fn new()->Id{
+        Id{id:Arc::new(Mutex::new(Vec::new()))}
+    }
+
+    fn get(&self)->Vec<u8>{
+        let id = self.id.lock().unwrap();
+        (*id).clone()
+    }
+
+    fn set(&self,id:&Vec<u8>){
+        let mut id = self.id.lock().unwrap();
+        (*id)=id.clone();
+    }
+}
+
 
 #[derive(Clone)]
 struct Peer{
+    id:Id,
     connection:quinn::Connection,
     self_sender:Sender<Vec<u8>>,
     peers:Peers
@@ -162,7 +185,7 @@ struct Peer{
 impl Peer{
     fn new(connection:quinn::Connection,peers:Peers,(send_stream, recv_stream): (quinn::SendStream, quinn::RecvStream))->Peer{
         let (self_sender,self_receiver) = mpsc::channel(100);
-        let peer = Peer{connection,peers,self_sender};
+        let peer = Peer{id:Id::new(),connection,peers,self_sender};
         let (tx1, rx1) = broadcast::channel(2);
         let tx2 = tx1.clone();
         let rx2=tx1.subscribe();
@@ -179,6 +202,7 @@ impl Peer{
         let self_addr = self.socket_addr_v4()?;
         let another_addr = self.peers.get_peer(id).handshake_to_s(self_addr).await?;
         self.handshake_to_c(another_addr).await?;
+        log::info!("{:?}: {} request {:?}: {}",self.id.get(),self_addr,id,another_addr);
         Ok(())
     }
     
