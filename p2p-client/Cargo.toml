@@ -10,3 +10,5 @@ common = {path = "../common"}
 tokio={version="*",features=["full","macros","rt","sync"]}
 quinn = "0.8.5"
 futures-util="*"
+log = "*"
+simple_logger = "*"

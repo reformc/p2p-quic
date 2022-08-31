@@ -5,13 +5,10 @@ use std::{
 };
 use quinn;
 use futures_util::{stream::StreamExt};
-//use anyhow::{anyhow, bail, Context, Result};
 use tokio::{self, 
     sync::mpsc::{self,Sender,Receiver},
     sync::broadcast
 };
-
-//use common;
 
 const BIND_ADDR:&str = "0.0.0.0:3400";
 const HOST_NAME:&str = "OK";//要和cert-key-file里使用的一致
@@ -21,20 +18,17 @@ const KEY:&[u8] = include_bytes!("G:/test.key");
 
 const RECV_TIMEOUT:u64=10;
 
-const MSG_REG:u8=1;//注册
-const MSG_REQ:u8=2;//请求连接其他peer
-const MSG_HAN_S:u8=3;//向被请求方peer发送请求方的peer信息。
-const MSG_HAN_C:u8=4;//向请求方peer发送被请求方的peer信息
+
 
 #[tokio::main]
 async fn main() {
-    simple_logger::init_with_level(log::Level::Debug).unwrap();
+    simple_logger::init_with_level(log::Level::Info).unwrap();
     server().await;
     //test().await;
     println!("Hello, world!");
 }
-
 /*
+#[allow(unused)]
 async fn test(){
     let socket = UdpSocket::bind(BIND_ADDR).expect("couldn't bind to address");
     let mut incoming = common::make_server_udp_endpoint(socket.try_clone().unwrap(),HOST_NAME,CER.to_vec(),KEY.to_vec()).unwrap();
@@ -52,18 +46,20 @@ async fn test(){
     println!("[client] connected: addr={}", connection.remote_address());
     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 }
-*/
 
+*/
 async fn server(){
     let socket = UdpSocket::bind(BIND_ADDR).expect("couldn't bind to address");
-    log::info!("listen on {}",BIND_ADDR);
     let peers = Peers::new();
     let mut incoming = common::make_server_udp_endpoint(socket.try_clone().unwrap(),HOST_NAME,CER.to_vec(),KEY.to_vec()).unwrap();
+    //tokio::spawn(client(socket));
+    log::info!("listen on {}",BIND_ADDR);
     loop{
         match incoming.next().await {
         Some(conn)=>{
+            //log::info!("{:?} incoming",conn.remote_address());
             let peers_cell = peers.clone();
-            tokio::spawn(async move{handle_connection(conn,peers_cell)});
+            tokio::spawn(async move{handle_connection(conn,peers_cell).await});
         },
         None=>{continue;},
         };
@@ -71,8 +67,9 @@ async fn server(){
 }
 
 async fn handle_connection(conn: quinn::Connecting,peers:Peers){
+    log::info!("{:?} incoming",conn.remote_address());
     match conn.await{
-        Ok(conn)=>{
+        Ok(conn)=>{            
             let quinn::NewConnection {
                 connection,
                 mut bi_streams,
@@ -88,7 +85,7 @@ async fn handle_connection(conn: quinn::Connecting,peers:Peers){
                     log::debug!("{}",socketv6addr.to_string());
                 }
             }
-            log::debug!("{} incomming",connection.remote_address());
+            log::info!("[92]{} incomming",connection.remote_address());
             loop{
                 match bi_streams.next().await{
                     Some(stream)=>{
@@ -96,15 +93,16 @@ async fn handle_connection(conn: quinn::Connecting,peers:Peers){
                             Ok(stream)=>{
                                 let connection_cell = connection.clone();
                                 let peers_cell = peers.clone();
-                                tokio::spawn(async move {handle_request(connection_cell,peers_cell,stream)});
+                                tokio::spawn(async move {handle_request(connection_cell,peers_cell,stream).await});
                             }
                             Err(e)=>{
-                                log::info!("{}",e)
+                                log::debug!("{}",e);
+                                return
                             }
                         }
                     },
                     None=>{
-                        log::debug!("{} close",connection.remote_address());
+                        log::debug!("93{} close",connection.remote_address());
                     }
                 }
             }
@@ -207,24 +205,24 @@ impl Peer{
     }
     
     async fn handshake_to_s(&self,addr:SocketAddrV4)->Result<SocketAddrV4,String>{
-        let mut bytes = vec!();
+        /*let mut bytes = vec!();
         let mut addr_bytes = common::addr::socketaddrv4_to_bytes(addr);
         bytes.push(addr_bytes.len() as u8 + 1);
         bytes.push(MSG_HAN_S);
-        bytes.append(&mut addr_bytes);
-        match self.self_sender.send(bytes).await{
+        bytes.append(&mut addr_bytes);*/
+        match self.self_sender.send(common::msg::Msg::HanS(addr).body()).await{
             Ok(_)=>{},
             Err(e)=>{return Err(format!("{}",e))}
         };
         self.socket_addr_v4()
     }
     async fn handshake_to_c(&self,addr:SocketAddrV4)->Result<(),String>{
-        let mut bytes = vec!();
+        /*let mut bytes = vec!();
         let mut addr_bytes = common::addr::socketaddrv4_to_bytes(addr);
         bytes.push(addr_bytes.len() as u8 + 1);
         bytes.push(MSG_HAN_C);
-        bytes.append(&mut addr_bytes);
-        match self.self_sender.send(bytes).await{
+        bytes.append(&mut addr_bytes);*/
+        match self.self_sender.send(common::msg::Msg::HanC(addr).body()).await{
             Ok(_)=>{},
             Err(e)=>{return Err(format!("{}",e))}
         };
@@ -271,7 +269,7 @@ impl Peer{
                                     continue
                                 }
                                 match buffer[1]{
-                                    MSG_REG=>{
+                                    common::msg::MSG_REG=>{
                                         match self.peers.reg(buffer[2..len].to_vec(),self.clone()){
                                             Ok(_)=>{
                                                 self.id.set(&buffer[2..len].to_vec());
@@ -292,12 +290,13 @@ impl Peer{
                                             Err(str)=>{self.self_sender.send(str.into_bytes()).await.unwrap();}
                                         };
                                     }//注册
-                                    MSG_REQ=>{
+                                    common::msg::MSG_REQ=>{
                                         match self.handshak_anthor(&buffer[2..len].to_vec()).await{
                                             Ok(_)=>{},
                                             Err(str)=>{println!("{}",str)}
                                         };
                                     },
+                                    common::msg::MSG_KEEPALIVE=>{}
                                     _ =>{}
                                 }
                             },
