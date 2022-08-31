@@ -1,5 +1,5 @@
 [package]
-name = "p2p-server"
+name = "common"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,8 +7,5 @@ edition = "2021"
 
 [dependencies]
 quinn="0.8.5"
-tokio={version="*",features=["full","macros","rt","sync"]}
-futures-util="*"
-log = "*"
-simple_logger = "*"
-common = {path = "../common"}
+rcgen="*"
+rustls="*"

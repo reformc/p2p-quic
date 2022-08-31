@@ -2,4 +2,5 @@
 members = [
     "p2p-client",
     "p2p-server",
+    "cert-key-file"
 ]

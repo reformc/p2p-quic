@@ -1,12 +1,10 @@
 [package]
-name = "p2p-client"
+name = "cert-key-file"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-common = {path = "../common"}
-tokio={version="*",features=["full","macros","rt","sync"]}
-quinn = "0.8.5"
-futures-util="*"
+rcgen = "*"
+rustls="*"
