@@ -12,3 +12,4 @@ quinn = "0.8.5"
 futures-util="*"
 log = "*"
 simple_logger = "*"
+clap = {version = "*", features = ["derive"] }

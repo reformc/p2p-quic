@@ -12,3 +12,4 @@ futures-util="*"
 log = "*"
 simple_logger = "*"
 common = {path = "../common"}
+defer = "*"

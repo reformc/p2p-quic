@@ -51,7 +51,8 @@ async fn test(){
 async fn server(){
     let socket = UdpSocket::bind(BIND_ADDR).expect("couldn't bind to address");
     let peers = Peers::new();
-    let mut incoming = common::make_server_udp_endpoint(socket.try_clone().unwrap(),HOST_NAME,CER.to_vec(),KEY.to_vec()).unwrap();
+    let transport_config = common::transport_config(3000, 10_000);
+    let mut incoming = common::make_server_udp_endpoint(socket.try_clone().unwrap(),HOST_NAME,CER.to_vec(),KEY.to_vec(),Some(transport_config)).unwrap();
     //tokio::spawn(client(socket));
     log::info!("listen on {}",BIND_ADDR);
     loop{
@@ -67,7 +68,6 @@ async fn server(){
 }
 
 async fn handle_connection(conn: quinn::Connecting,peers:Peers){
-    log::info!("{:?} incoming",conn.remote_address());
     match conn.await{
         Ok(conn)=>{            
             let quinn::NewConnection {
@@ -142,6 +142,7 @@ impl Peers{
     pub fn log_out(&self,id:&Vec<u8>){
         let mut peers = self.peers.lock().unwrap();
         (*peers).remove(id);
+        log::info!("{:?} log out",id)
     }
 
     pub fn get_peer(&self,id:&Vec<u8>)->Peer{
@@ -246,6 +247,7 @@ impl Peer{
                         },
                         None=>{
                             close_send.send(false).unwrap();
+                            return;
                         }
                     }
                 },
@@ -259,6 +261,11 @@ impl Peer{
 
     async fn reciver_recv(&self,mut recv_stream:quinn::RecvStream,close_send:broadcast::Sender<bool>,mut close_receive:broadcast::Receiver<bool>){//接收peer的信息
         let mut buffer = [0; 64*1024];
+        let close_send1 = close_send.clone();
+        let _p = CallOnDrop(move||{
+            log::debug!("{:?} return",self.id.get());
+            close_send1.send(false).unwrap();
+        });
         loop{
             tokio::select! {
                 result = recv_stream.read(&mut buffer) => match result {
@@ -266,6 +273,7 @@ impl Peer{
                         match msg{
                             Some(len)=>{
                                 if len <2{
+                                    log::debug!("lenth is less than 2");
                                     continue
                                 }
                                 match buffer[1]{
@@ -279,9 +287,11 @@ impl Peer{
                                                 tokio::spawn(async move{
                                                     match log_out_channel.recv().await{
                                                         Ok(_)=>{
+                                                            log::info!("{:?} log out",id);
                                                             peer_close.peers.log_out(&id);
                                                         }
-                                                        Err(_)=>{
+                                                        Err(e)=>{
+                                                            log::debug!("{:?} close channel receive Err:{}",id,e);
                                                             return
                                                         }
                                                     }
@@ -292,25 +302,32 @@ impl Peer{
                                     }//注册
                                     common::msg::MSG_REQ=>{
                                         match self.handshak_anthor(&buffer[2..len].to_vec()).await{
-                                            Ok(_)=>{},
-                                            Err(str)=>{println!("{}",str)}
+                                            Ok(_)=>{log::info!("success request,from:{:?},to:{:?}",self.id.get(),&buffer[2..len].to_vec())},
+                                            Err(str)=>{log::info!("faile request,from:{:?},to:{:?},errmsg:{}",self.id.get(),&buffer[2..len].to_vec(),str)}
                                         };
                                     },
                                     common::msg::MSG_KEEPALIVE=>{}
                                     _ =>{}
                                 }
                             },
-                            None=> return
+                            None=> {//流关闭
+                                log::debug!("recv_stream is close,addr:{},id:{}",self.connection.remote_address(),recv_stream.id());
+                                return
+                            }
                         }
                     },
-                    Err(_) =>return,
+                    Err(e) =>{
+                        log::debug!("read recv stream {} err:{}",self.connection.remote_address(),e);
+                        return
+                    },
                 },
                 _ = close_receive.recv()=>{
+                    log::debug!("close receive");
                     return
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_secs(RECV_TIMEOUT)) => {
                     close_send.send(false).unwrap();
-                    println!("reading timeout {} s",RECV_TIMEOUT);
+                    log::debug!("reading timeout {} s",RECV_TIMEOUT);
                 }
             }
         }
@@ -318,3 +335,10 @@ impl Peer{
 
 }
 
+pub struct CallOnDrop<F: Fn()>(F);
+
+impl <F: Fn()>Drop for CallOnDrop<F>{
+    fn drop(&mut self){
+        (self.0)();
+    }
+}
