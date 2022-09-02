@@ -4,6 +4,7 @@ use quinn::{ClientConfig, Endpoint, Incoming, ServerConfig, EndpointConfig};
 use std::{error::Error, net::{SocketAddr, UdpSocket}, sync::Arc};
 pub mod addr;
 pub mod msg;
+pub mod socsk5_server;
 
 /// Constructs a QUIC endpoint configured for use a client only.
 ///
