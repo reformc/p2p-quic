@@ -145,9 +145,12 @@ impl Peers{
         log::info!("{:?} log out",id)
     }
 
-    pub fn get_peer(&self,id:&Vec<u8>)->Peer{
+    pub fn get_peer(&self,id:&Vec<u8>)->Option<Peer>{
         let peers = self.peers.lock().unwrap();
-        (*peers).get(id).unwrap().clone()
+        match (*peers).get(id){
+            Some(v)=>{Some(v.clone())},
+            None=>{None}
+        }
     }
 }
 
@@ -199,9 +202,16 @@ impl Peer{
     //向其他peer发起连接请求。
     async fn handshak_anthor(&self,id:&Vec<u8>)->Result<(),String>{
         let self_addr = self.socket_addr_v4()?;
-        let another_addr = self.peers.get_peer(id).handshake_to_s(self_addr).await?;
-        self.handshake_to_c(another_addr).await?;
-        log::info!("{:?}: {} request {:?}: {}",self.id.get(),self_addr,id,another_addr);
+        match self.peers.get_peer(id){
+            Some(peer)=>{
+                self.handshake_to_c(peer.handshake_to_s(self_addr).await?).await?;
+                log::info!("{:?}: {} request {:?}: {}",self.id.get(),self_addr,id,peer.connection.remote_address());
+            },
+            None=>{
+                self.self_sender.send(common::msg::Msg::Err("remote id does not exist".as_bytes().to_vec()).body()).await.unwrap();
+                log::info!("{:?}: {} request fail remote id {:?} does not exist",self.id.get(),self_addr,id);
+            }
+        }
         Ok(())
     }
     
@@ -287,7 +297,6 @@ impl Peer{
                                                 tokio::spawn(async move{
                                                     match log_out_channel.recv().await{
                                                         Ok(_)=>{
-                                                            log::info!("{:?} log out",id);
                                                             peer_close.peers.log_out(&id);
                                                         }
                                                         Err(e)=>{

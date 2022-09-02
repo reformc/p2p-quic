@@ -3,6 +3,7 @@ pub const MSG_REQ:u8=2;//请求连接其他peer
 pub const MSG_HAN_S:u8=3;//向被请求方peer发送请求方的peer信息。
 pub const MSG_HAN_C:u8=4;//向请求方peer发送被请求方的peer信息
 pub const MSG_KEEPALIVE:u8=5;
+pub const MSG_ERR:u8=255;
 
 use crate::addr;
 
@@ -55,7 +56,8 @@ pub enum Msg{
     HanS(std::net::SocketAddrV4),
     Reg(Vec<u8>),
     Req(Vec<u8>),
-    Keepalive(Vec<u8>)
+    Keepalive(Vec<u8>),
+    Err(Vec<u8>)
 }
 
 impl Msg{
@@ -75,6 +77,9 @@ impl Msg{
             },
             Msg::Keepalive(id)=>{
                 Msg::msg_buff(id.clone(), MSG_KEEPALIVE)
+            },
+            Msg::Err(body)=>{
+                Msg::msg_buff(body.clone(),MSG_ERR)
             }
         }
     }
