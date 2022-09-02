@@ -92,3 +92,10 @@ impl Msg{
         bytes
     }
 }
+
+pub fn id_str(buff:&[u8])->String{
+    match std::str::from_utf8(buff){
+        Ok(v)=>{v.to_string()}
+        Err(_)=>{format!("{:?}",buff)}
+    }
+}

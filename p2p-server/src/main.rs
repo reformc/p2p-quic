@@ -16,8 +16,8 @@ const HOST_NAME:&str = "OK";//要和cert-key-file里使用的一致
 const CER:&[u8] = include_bytes!("G:/test.cer");
 const KEY:&[u8] = include_bytes!("G:/test.key");
 
-const RECV_TIMEOUT:u64=10;
-
+const KEEPALIVE_INTERVAL_MILLIS:u64=3000;
+const IDLE_TIMEOUT_MILLIS:u32=10_000;
 
 
 #[tokio::main]
@@ -51,7 +51,7 @@ async fn test(){
 async fn server(){
     let socket = UdpSocket::bind(BIND_ADDR).expect("couldn't bind to address");
     let peers = Peers::new();
-    let transport_config = common::transport_config(3000, 10_000);
+    let transport_config = common::transport_config(KEEPALIVE_INTERVAL_MILLIS, IDLE_TIMEOUT_MILLIS);
     let mut incoming = common::make_server_udp_endpoint(socket.try_clone().unwrap(),HOST_NAME,CER.to_vec(),KEY.to_vec(),Some(transport_config)).unwrap();
     //tokio::spawn(client(socket));
     log::info!("listen on {}",BIND_ADDR);
@@ -132,7 +132,7 @@ impl Peers{
         match (*peers).get(&id){
             Some(_)=>{Err("id already exists".to_string())},
             None=>{
-                log::info!("{:?} online",&id);
+                log::info!("{} online",common::msg::id_str(&id));
                 (*peers).insert(id, peer);
                 Ok(())
             }
@@ -142,7 +142,7 @@ impl Peers{
     pub fn log_out(&self,id:&Vec<u8>){
         let mut peers = self.peers.lock().unwrap();
         (*peers).remove(id);
-        log::info!("{:?} log out",id)
+        log::info!("{} offline",common::msg::id_str(&id))
     }
 
     pub fn get_peer(&self,id:&Vec<u8>)->Option<Peer>{
@@ -205,11 +205,13 @@ impl Peer{
         match self.peers.get_peer(id){
             Some(peer)=>{
                 self.handshake_to_c(peer.handshake_to_s(self_addr).await?).await?;
-                log::info!("{:?}: {} request {:?}: {}",self.id.get(),self_addr,id,peer.connection.remote_address());
+                log::info!("{}: {} request {}: {}",common::msg::id_str(&self.id.get()),self_addr,common::msg::id_str(&id),peer.connection.remote_address());
             },
             None=>{
                 self.self_sender.send(common::msg::Msg::Err("remote id does not exist".as_bytes().to_vec()).body()).await.unwrap();
-                log::info!("{:?}: {} request fail remote id {:?} does not exist",self.id.get(),self_addr,id);
+                let err_msg = format!("{}: {} request fail remote id {} does not exist",common::msg::id_str(&self.id.get()),self_addr,common::msg::id_str(&id));
+                log::info!("{}",err_msg);
+                return Err(err_msg)
             }
         }
         Ok(())
@@ -273,7 +275,7 @@ impl Peer{
         let mut buffer = [0; 64*1024];
         let close_send1 = close_send.clone();
         let _p = CallOnDrop(move||{
-            log::debug!("{:?} return",self.id.get());
+            log::debug!("{} return",common::msg::id_str(&self.id.get()));
             close_send1.send(false).unwrap();
         });
         loop{
@@ -300,7 +302,7 @@ impl Peer{
                                                             peer_close.peers.log_out(&id);
                                                         }
                                                         Err(e)=>{
-                                                            log::debug!("{:?} close channel receive Err:{}",id,e);
+                                                            log::debug!("{:?} close channel receive Err:{}",common::msg::id_str(&id),e);
                                                             return
                                                         }
                                                     }
@@ -311,11 +313,13 @@ impl Peer{
                                     }//注册
                                     common::msg::MSG_REQ=>{
                                         match self.handshak_anthor(&buffer[2..len].to_vec()).await{
-                                            Ok(_)=>{log::info!("success request,from:{:?},to:{:?}",self.id.get(),&buffer[2..len].to_vec())},
-                                            Err(str)=>{log::info!("faile request,from:{:?},to:{:?},errmsg:{}",self.id.get(),&buffer[2..len].to_vec(),str)}
+                                            Ok(_)=>{log::info!("success request,from:{:?},to:{:?}",common::msg::id_str(&self.id.get()),common::msg::id_str(&buffer[2..len]))},
+                                            Err(str)=>{log::info!("fail request,from:{:?},to:{:?},errmsg:{}",common::msg::id_str(&self.id.get()),common::msg::id_str(&buffer[2..len]),str)}
                                         };
                                     },
-                                    common::msg::MSG_KEEPALIVE=>{}
+                                    common::msg::MSG_KEEPALIVE=>{
+                                        log::debug!("{} keepalive",common::msg::id_str(&buffer[2..len]));
+                                    }
                                     _ =>{}
                                 }
                             },
@@ -333,10 +337,6 @@ impl Peer{
                 _ = close_receive.recv()=>{
                     log::debug!("close receive");
                     return
-                }
-                _ = tokio::time::sleep(std::time::Duration::from_secs(RECV_TIMEOUT)) => {
-                    close_send.send(false).unwrap();
-                    log::debug!("reading timeout {} s",RECV_TIMEOUT);
                 }
             }
         }

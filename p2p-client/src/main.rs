@@ -1,11 +1,6 @@
-use std::{
-    net::{UdpSocket,SocketAddr,SocketAddrV4},
-    collections::HashMap,
-    sync::{Arc, Mutex}
-};
-use futures_util::{stream::StreamExt, AsyncWriteExt};
+use std::net::{UdpSocket,SocketAddr};
+use futures_util::stream::StreamExt;
 use common;
-use log;
 use clap::Parser;
 
 //const SERVER_ADDR:&str = "127.0.0.1:3400";
@@ -17,10 +12,6 @@ const KEY:&[u8] = include_bytes!("G:/test.key");
 
 const KEEPALIVE_INTERVAL_MILLIS:u64=3000;
 const IDLE_TIMEOUT_MILLIS:u32=10_000;
-
-//const PEER_ID:&str = "reform";
-
-const RECV_TIMEOUT:u64=10;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -34,13 +25,13 @@ struct Args{
     #[clap(long,short,default_value = "127.0.0.1:3400")]
     server:String,
     ///本机quic端口
-    #[clap(long,short,default_value = "3401")]
+    #[clap(long,short,default_value = "53401")]
     quic_port:u16,
     ///本机id
-    #[clap(long,short,default_value = "reform")]
+    #[clap(long,short,default_value = "default")]
     id:String,    
     ///对方id
-    #[clap(long,short,default_value = "none")]
+    #[clap(long,short,default_value = "")]
     another:String
 }
 
@@ -52,8 +43,20 @@ async fn main() {
 }
 
 async fn client(){
-    let args = Args::parse();
-    let socket = UdpSocket::bind(format!("0.0.0.0:{}",&args.quic_port)).expect("couldn't bind to address");    
+    let mut args = Args::parse();
+    if args.another == args.id{
+        panic!("you cant not connect to yourself!");
+    }
+    match &args.id as &str{
+        "default"=>{
+            args.id = nanoid::nanoid!(9);
+        },
+        _ =>{}
+    }
+    let bind_addr = format!("0.0.0.0:{}",&args.quic_port);
+    log::info!("\nbind:\t{}\nserver:\t{}\nlocal:\t{}\n",bind_addr,args.server,common::msg::id_str(args.id.as_bytes()));
+    let socket = UdpSocket::bind(&bind_addr).expect("couldn't bind to address");
+    drop(bind_addr);
     let transport_config_server = common::transport_config(KEEPALIVE_INTERVAL_MILLIS, IDLE_TIMEOUT_MILLIS);
     let mut incoming = common::make_server_udp_endpoint(socket.try_clone().unwrap(),HOST_NAME,CER.to_vec(),KEY.to_vec(),Some(transport_config_server)).unwrap();
     tokio::spawn(async move {
@@ -64,96 +67,142 @@ async fn client(){
             connection.stable_id()
         );
     });
+    loop{
     let transport_config_client = common::transport_config(KEEPALIVE_INTERVAL_MILLIS, IDLE_TIMEOUT_MILLIS);
     let peer_client = common::make_client_udp_endpoint(socket.try_clone().unwrap(), &[CER],Some(transport_config_client)).unwrap();
     let peer_client_connect = peer_client.connect(args.server.parse().unwrap(), HOST_NAME).unwrap();
     let quinn::NewConnection { connection,.. } = peer_client_connect.await.unwrap();
     log::info!("[client] connected: addr={}", connection.remote_address());
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    //tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     //let stream = bi_streams.next().await.unwrap().unwrap();
     let bi_stream = connection.open_bi().await.unwrap();
-    handle_peer_client_connect(&args.id,socket,bi_stream).await;
-    connection.close(quinn::VarInt::MAX, quinn::ConnectionError::LocallyClosed.to_string().as_bytes())
+    handle_peer_client_connect(&args.id,&args.another,socket.try_clone().unwrap(),bi_stream).await;
+    log::info!("handle over");
+    tokio::time::sleep(tokio::time::Duration::from_secs(50)).await;
+    //connection.close(quinn::VarInt::MAX, quinn::ConnectionError::LocallyClosed.to_string().as_bytes())
+    }
 }
 
 
 
-async fn handle_peer_client_connect(id:&str,socket:UdpSocket,(mut send_stream, recv_stream): (quinn::SendStream, quinn::RecvStream)){
-    
-    let mut buffer = [0; 64*1024];
+async fn handle_peer_client_connect(self_id:&str,another_id:&str,socket:UdpSocket,(mut send_stream, mut recv_stream): (quinn::SendStream, quinn::RecvStream)){  
+    send_stream.write_all(&common::msg::Msg::Reg(self_id.as_bytes().to_vec()).body()).await.unwrap();
+    if another_id ==""{
+        let self_id = self_id.to_string();
+        tokio::spawn(async move{handle_peer_client_connect_send_keepalive(&self_id, send_stream).await;});
+    }else{
+        send_stream.write_all(&common::msg::Msg::Req(another_id.as_bytes().to_vec()).body()).await.unwrap();
+    }
+    let mut buffer = [0; 64*1024];    
     loop{
-        tokio::select! {
-            result = recv_stream.read(&mut buffer) => match result {
-                Ok(msg) => {
-                    match msg{
-                        Some(len)=>{
-                            if len <2{
-                                continue
+        let result = recv_stream .read(&mut buffer).await; match result {
+            Ok(msg) => {
+                match msg{                        
+                    Some(len)=>{
+                        if len <2{
+                            continue
+                        }
+                        match buffer[1]{
+                            common::msg::MSG_HAN_S=>{
+                                let addr = common::addr::bytes_to_socketaddrv4(&buffer[2..len]);
+                                log::info!("receive a request,another addr:{}",addr.to_string());
+                                handshake_s(socket.try_clone().unwrap(),SocketAddr::V4(addr)).await;
                             }
-                            match buffer[1]{
-                                common::msg::MSG_HAN_S=>{
-                                    let addr = common::addr::bytes_to_socketaddrv4(&buffer[2..len]);
-                                    log::info!("receive a request,another addr:{}",addr.to_string());
-                                    tokio::spawn(async {
-                                        let transport_config_client = common::transport_config(KEEPALIVE_INTERVAL_MILLIS, IDLE_TIMEOUT_MILLIS);
-                                        let socket_s = socket.try_clone().unwrap();
-                                        let client = common::make_client_udp_endpoint(socket_s, &[CER],Some(transport_config_client)).unwrap();
-                                        let conn = client.connect(SocketAddr::V4(addr),HOST_NAME).unwrap().await;
-                                        match conn{
-                                            Ok(quinn::NewConnection { connection,.. })=>{log::info!("handshake to the request {} success",addr.to_string())},
-                                            Err(e)=>{log::info!("handshake to the request {} err:{}",addr.to_string(),e)}
-                                        }
-                                        //let quinn::NewConnection { connection,.. } = client.connect(SocketAddr::V4(addr),HOST_NAME).unwrap().await;
-                                    });
-                                    //send_stream.write_all(&b).await.unwrap();
-                                }//注册
-                                common::msg::MSG_HAN_C=>{
-                                    let addr = common::addr::bytes_to_socketaddrv4(&buffer[2..len]);
-                                    let socket_c = socket.try_clone().unwrap();
-                                    tokio::spawn(async move{transnation_client(socket_c, SocketAddr::V4(addr)).await;});
-                                    log::info!("request receive the response,another addr:{}",addr.to_string());
-                                    match self.handshak_anthor(&buffer[2..len].to_vec()).await{
-                                        Ok(_)=>{},
-                                        Err(str)=>{println!("{}",str)}
-                                    };
-                                },
-                                common::msg::MSG_KEEPALIVE=>{},
-                                common::msg::MSG_ERR=>{
-
-                                }
-                                _ =>{}
+                            common::msg::MSG_HAN_C=>{
+                                let addr = common::addr::bytes_to_socketaddrv4(&buffer[2..len]);
+                                let socket_c = socket.try_clone().unwrap();
+                                tokio::spawn(async move{transnation_client(socket_c, SocketAddr::V4(addr)).await;});
+                                break
+                            },
+                            common::msg::MSG_ERR=>{
+                                log::info!("server_recv_stream read err:{}",common::msg::id_str(&buffer[2..len]));
+                                break;
                             }
-                        },
-                        None=> return
+                            _ =>{}
+                        }
+                    },
+                    None=> log::debug!("server close")
                     }
                 },
-                Err(_) =>return,
-            },
-            //_ = close_receive.recv()=>{
-            //    return
-            
-            _ = tokio::time::sleep(std::time::Duration::from_secs(RECV_TIMEOUT)) => {
-                //close_send.send(false).unwrap();
-                println!("reading timeout {} s",RECV_TIMEOUT);
+            Err(e) =>{
+                log::info!("{}",e);
+                //common::msg::Msg::Err("server recv_stream read err".as_bytes().to_vec())
             }
-        }
-    }
-    
-  
-    let b = common::msg::Msg::Reg(id.as_bytes().to_vec()).body();
-    send_stream.write_all(&b).await.unwrap();  
-    log::info!("id:{:?}",b); 
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-    //send_stream.finish().await.unwrap(); 
-    //send_stream.write_all(&b).await.unwrap();  
-
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        };
+    }    
 }
 
-async fn handle_peer_client_connect_sendstream(){
-
+async fn handle_peer_client_connect_send_keepalive(self_id:&str,mut send_stream:quinn::SendStream){
+    loop{
+        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+        match send_stream.write_all(&common::msg::Msg::Keepalive(self_id.as_bytes().to_vec()).body()).await{
+            Ok(_)=>{},
+            Err(e)=>{
+                log::debug!("{e}");
+                return;
+            }
+        };
+    }
+}
+/*
+async fn handle_peer_client_connect_recv_stream(socket:UdpSocket,mut recv_stream:quinn::RecvStream){
+    let mut buffer = [0; 64*1024];
+    log::info!("recv_stream");
+    loop{
+        let result = recv_stream.read(&mut buffer).await; match result {
+            Ok(msg) => {
+                match msg{                        
+                    Some(len)=>{
+                        if len <2{
+                            continue
+                        }
+                        match buffer[1]{
+                            common::msg::MSG_HAN_S=>{
+                                let addr = common::addr::bytes_to_socketaddrv4(&buffer[2..len]);
+                                log::info!("receive a request,another addr:{}",addr.to_string());
+                                handshake_s(socket.try_clone().unwrap(),SocketAddr::V4(addr)).await;
+                            }//注册
+                            common::msg::MSG_HAN_C=>{
+                                let addr = common::addr::bytes_to_socketaddrv4(&buffer[2..len]);
+                                let socket_c = socket.try_clone().unwrap();
+                                tokio::spawn(async move{transnation_client(socket_c, SocketAddr::V4(addr)).await;});
+                                break
+                                //log::info!("request receive the response,another addr:{}",addr.to_string());
+                            },
+                            //common::msg::MSG_KEEPALIVE=>{},
+                            common::msg::MSG_ERR=>{
+                                log::debug!("server_recv_stream read err{}",common::msg::id_str(&buffer[2..len]));
+                                break;
+                            }
+                            _ =>{}
+                        }
+                    },
+                    None=> log::debug!("server close")
+                    }                
+                },
+            Err(e) =>{
+                log::info!("{}",e);
+                //common::msg::Msg::Err("server recv_stream read err".as_bytes().to_vec())
+            }
+        };
+    }    
+    //common::msg::Msg::Err("server close".as_bytes().to_vec())
+}
+*/
+async fn handshake_s(socket:UdpSocket,addr:SocketAddr){
+    tokio::spawn(async move {
+        let transport_config_client = common::transport_config(KEEPALIVE_INTERVAL_MILLIS, IDLE_TIMEOUT_MILLIS);
+        let client = common::make_client_udp_endpoint(socket, &[CER],Some(transport_config_client)).unwrap();
+        let conn = client.connect(addr,HOST_NAME).unwrap().await;
+        match conn{
+            Ok(quinn::NewConnection { connection: _,.. })=>{
+                log::info!("handshake to the request {} success",addr.to_string());
+            },
+            Err(e)=>{log::info!("handshake to the request {} err:{}",addr.to_string(),e)}
+        }
+    });
 }
 
 async fn transnation_client(socket:UdpSocket,addr:SocketAddr){
-
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 }
