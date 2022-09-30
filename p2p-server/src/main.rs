@@ -9,12 +9,25 @@ use tokio::{self,
     sync::mpsc::{self,Sender,Receiver},
     sync::broadcast
 };
+use clap::Parser;
 
-const BIND_ADDR:&str = "0.0.0.0:3400";
-const HOST_NAME:&str = "OK";//要和cert-key-file里使用的一致
+#[derive(Parser, Debug)]
+#[clap(
+    author="reform <reformgg@gmail.com>", 
+    version="0.1.0",
+    about="socks5 by p2p over quic"
+)]
+struct Args {
+    /// 监听端口。
+    #[clap(long,short,default_value = "3400")]
+    port: u16
+}
 
-const CER:&[u8] = include_bytes!("G:/test.cer");
-const KEY:&[u8] = include_bytes!("G:/test.key");
+const HOST_NAME:&str = "reform";//要和cert-key-file里使用的一致
+
+
+pub const CER:&[u8] = include_bytes!("G:/reform.cer");
+pub const KEY:&[u8] = include_bytes!("G:/reform.key");
 
 const KEEPALIVE_INTERVAL_MILLIS:u64=3000;
 const IDLE_TIMEOUT_MILLIS:u32=10_000;
@@ -49,12 +62,14 @@ async fn test(){
 
 */
 async fn server(){
-    let socket = UdpSocket::bind(BIND_ADDR).expect("couldn't bind to address");
+    let args = Args::parse();
+    let bind_addr = format!("0.0.0.0:{}",args.port.to_string());
+    let socket = UdpSocket::bind(&bind_addr).expect("couldn't bind to address");
     let peers = Peers::new();
     let transport_config = common::transport_config(KEEPALIVE_INTERVAL_MILLIS, IDLE_TIMEOUT_MILLIS);
     let mut incoming = common::make_server_udp_endpoint(socket.try_clone().unwrap(),HOST_NAME,CER.to_vec(),KEY.to_vec(),Some(transport_config)).unwrap();
     //tokio::spawn(client(socket));
-    log::info!("listen on {}",BIND_ADDR);
+    log::info!("listen on {}",&bind_addr);
     loop{
         match incoming.next().await {
         Some(conn)=>{
@@ -223,6 +238,7 @@ impl Peer{
         bytes.push(addr_bytes.len() as u8 + 1);
         bytes.push(MSG_HAN_S);
         bytes.append(&mut addr_bytes);*/
+        log::info!("han_s{:?}",common::msg::Msg::HanS(addr).body());
         match self.self_sender.send(common::msg::Msg::HanS(addr).body()).await{
             Ok(_)=>{},
             Err(e)=>{return Err(format!("{}",e))}
@@ -235,6 +251,7 @@ impl Peer{
         bytes.push(addr_bytes.len() as u8 + 1);
         bytes.push(MSG_HAN_C);
         bytes.append(&mut addr_bytes);*/
+        log::info!("han_c{:?}",common::msg::Msg::HanC(addr).body());
         match self.self_sender.send(common::msg::Msg::HanC(addr).body()).await{
             Ok(_)=>{},
             Err(e)=>{return Err(format!("{}",e))}
@@ -288,6 +305,7 @@ impl Peer{
                                     log::debug!("lenth is less than 2");
                                     continue
                                 }
+                                log::debug!("recv:len:{},type:{},body:{}",buffer[0],buffer[1],std::str::from_utf8(&buffer[2..len]).unwrap_or("not utf8"));
                                 match buffer[1]{
                                     common::msg::MSG_REG=>{
                                         match self.peers.reg(buffer[2..len].to_vec(),self.clone()){

@@ -7,4 +7,6 @@ edition = "2021"
 
 [dependencies]
 rcgen = "*"
-rustls="*"
+rustls= "*"
+clap = {version = "*", features = ["derive"] }
+dirs = "*"

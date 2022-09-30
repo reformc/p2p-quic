@@ -13,3 +13,4 @@ log = "*"
 simple_logger = "*"
 common = {path = "../common"}
 defer = "*"
+clap = {version = "*", features = ["derive"] }

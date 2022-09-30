@@ -53,7 +53,8 @@ pub fn make_client_udp_endpoint(
 pub fn transport_config(keepalive_interval_millis:u64,idle_timeout_millis:u32)->Arc<quinn::TransportConfig>{
     let mut transport_config = quinn::TransportConfig::default();
     transport_config.keep_alive_interval(Some(std::time::Duration::from_millis(keepalive_interval_millis)));
-    transport_config.max_idle_timeout(Some(quinn::IdleTimeout::from(quinn::VarInt::from_u32(idle_timeout_millis))));//毫秒
+    transport_config.max_idle_timeout(Some(quinn::IdleTimeout::from(quinn::VarInt::from_u32(idle_timeout_millis))));//毫秒    
+    //transport_config.max_idle_timeout(Some(std::time::Duration::from_secs(10).try_into().unwrap()));
     Arc::new(transport_config)
 }
 

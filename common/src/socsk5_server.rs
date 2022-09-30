@@ -9,8 +9,8 @@ use tokio_stream::StreamExt;
 
 
 const REQUEST_TIMEOUT:u64=10;
-const SOCKS_USER:&str="alsdfjlasdfa";
-const SOCKS_PASS:&str="asdfasdfasdf";
+pub const SOCKS_USER:&str="alsdfjlasdfa";
+pub const SOCKS_PASS:&str="asdfasdfasdf";
 
 pub async fn spawn_socks_server(port:u16) -> Result<()> {
     let mut config = Config::default();
@@ -43,10 +43,29 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     tokio::task::spawn(async move {
-        fut.await.unwrap();
-        //if let Err(e) = fut.await {
-        //    //error!("{:#}", &e);
-        //}
+        //fut.await.unwrap();
+        if let Err(e) = fut.await {
+            log::info!("socks5 err:{}",e);
+            //error!("{:#}", &e);
+        }
     })
+}
+
+pub async fn client (socks_server:String,user:&str,pass:&str,target_addr:&str,target_port:u16)->Result<(),String>{
+    let mut config = fast_socks5::client::Config::default();
+    config.set_skip_auth(false);
+    let socks = fast_socks5::client::Socks5Stream::connect_with_password(
+        socks_server,
+        target_addr.to_string(),
+        target_port,
+        user.to_string(),
+        pass.to_string(),
+        config,
+    )
+    .await;
+    match socks{
+        Ok(_)=>{Ok(())},
+        Err(e)=>{Err(format!("{}",e))}
+    }
 }
 
